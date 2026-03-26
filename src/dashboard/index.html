@@ -1,0 +1,706 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>CS2 Stats</title>
+  <style>
+    :root {
+      --bg:       #0e0f11;
+      --surface:  #16181d;
+      --border:   #2a2d35;
+      --text:     #e2e4ea;
+      --muted:    #7a7f8e;
+      --accent:   #f5a623;
+      --win:      #4caf7d;
+      --loss:     #e05c5c;
+      --tie:      #8a8f9e;
+      --ct:       #5b9cf6;
+      --t:        #f0a040;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { background: var(--bg); color: var(--text); font-family: 'Segoe UI', system-ui, sans-serif; font-size: 14px; }
+
+    /* Layout */
+    #app { display: flex; height: 100vh; overflow: hidden; }
+    nav { width: 180px; min-width: 180px; background: var(--surface); border-right: 1px solid var(--border); display: flex; flex-direction: column; padding: 20px 0; }
+    nav .logo { padding: 0 20px 24px; font-size: 16px; font-weight: 700; color: var(--accent); letter-spacing: .5px; }
+    nav a { display: block; padding: 10px 20px; color: var(--muted); text-decoration: none; cursor: pointer; transition: color .15s, background .15s; }
+    nav a:hover, nav a.active { color: var(--text); background: rgba(255,255,255,.05); }
+    nav a.active { border-left: 2px solid var(--accent); }
+
+    main { flex: 1; overflow-y: auto; padding: 28px 32px; }
+    .view { display: none; }
+    .view.active { display: block; }
+
+    h2 { font-size: 18px; font-weight: 600; margin-bottom: 20px; color: var(--text); }
+    h3 { font-size: 13px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .8px; margin-bottom: 12px; }
+
+    /* KPI Cards */
+    .kpi-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 14px; margin-bottom: 28px; }
+    .kpi { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 16px; }
+    .kpi .label { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .8px; margin-bottom: 6px; }
+    .kpi .value { font-size: 26px; font-weight: 700; color: var(--text); }
+    .kpi .sub { font-size: 11px; color: var(--muted); margin-top: 4px; }
+
+    /* Tables */
+    .table-wrap { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; overflow: hidden; margin-bottom: 24px; }
+    table { width: 100%; border-collapse: collapse; }
+    th { padding: 10px 14px; text-align: left; font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .7px; border-bottom: 1px solid var(--border); background: rgba(0,0,0,.2); }
+    td { padding: 10px 14px; border-bottom: 1px solid var(--border); color: var(--text); }
+    tr:last-child td { border-bottom: none; }
+    tr:hover td { background: rgba(255,255,255,.025); }
+
+    /* Charts (canvas) */
+    .chart-wrap { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 20px; margin-bottom: 24px; }
+    canvas { max-width: 100%; }
+
+    /* Bar component */
+    .bar-row { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
+    .bar-row .bar-label { width: 100px; font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .bar-track { flex: 1; background: var(--border); border-radius: 3px; height: 8px; }
+    .bar-fill { height: 100%; border-radius: 3px; background: var(--accent); transition: width .4s; }
+    .bar-row .bar-val { width: 48px; text-align: right; font-size: 12px; color: var(--text); }
+
+    /* Result badges */
+    .badge { display: inline-block; padding: 2px 7px; border-radius: 4px; font-size: 11px; font-weight: 600; }
+    .badge-W { background: rgba(76,175,125,.15); color: var(--win); }
+    .badge-L { background: rgba(224,92,92,.15); color: var(--loss); }
+    .badge-T { background: rgba(138,143,158,.15); color: var(--tie); }
+
+    /* Grid helpers */
+    .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+    @media (max-width: 900px) { .two-col { grid-template-columns: 1fr; } }
+
+    /* Sync status bar */
+    #sync-bar { position: fixed; bottom: 0; left: 0; right: 0; height: 30px; background: var(--surface); border-top: 1px solid var(--border); display: flex; align-items: center; padding: 0 20px; font-size: 11px; color: var(--muted); gap: 12px; z-index: 100; }
+    #sync-bar .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--win); }
+    #sync-bar .auth-btn { margin-left: auto; background: var(--accent); color: #000; border: none; border-radius: 4px; padding: 2px 10px; font-size: 11px; font-weight: 600; cursor: pointer; }
+    #sync-bar .auth-btn.logout { background: transparent; color: var(--muted); border: 1px solid var(--border); }
+    main { padding-bottom: 46px; }
+
+    /* Sync / refresh button */
+    .section-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
+    .section-header h3 { margin-bottom: 0; }
+    .btn-sync { background: transparent; border: 1px solid var(--border); color: var(--muted); border-radius: 5px; padding: 3px 12px; font-size: 11px; cursor: pointer; display: flex; align-items: center; gap: 6px; transition: color .15s, border-color .15s; }
+    .btn-sync:hover:not(:disabled) { color: var(--text); border-color: var(--accent); }
+    .btn-sync:disabled { opacity: .4; cursor: default; }
+    .btn-sync .spin { display: inline-block; width: 10px; height: 10px; border: 1.5px solid var(--border); border-top-color: var(--accent); border-radius: 50%; animation: spin .7s linear infinite; }
+
+    /* Not-authed banner */
+    .auth-banner { background: rgba(245,166,35,.07); border: 1px solid rgba(245,166,35,.25); border-radius: 8px; padding: 16px 20px; margin-bottom: 20px; display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+    .auth-banner p { font-size: 13px; color: var(--muted); line-height: 1.5; }
+    .auth-banner p strong { color: var(--accent); }
+    .auth-banner button { flex-shrink: 0; background: var(--accent); color: #000; border: none; border-radius: 6px; padding: 6px 16px; font-size: 12px; font-weight: 600; cursor: pointer; white-space: nowrap; }
+
+    .empty { color: var(--muted); font-size: 13px; padding: 32px; text-align: center; }
+
+    /* Steam login modal */
+    #auth-modal { display: none; position: fixed; inset: 0; background: rgba(0,0,0,.7); z-index: 200; align-items: center; justify-content: center; }
+    #auth-modal.open { display: flex; }
+    .auth-card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 32px; text-align: center; max-width: 320px; width: 100%; }
+    .auth-card h3 { margin-bottom: 8px; font-size: 16px; }
+    .auth-card p  { color: var(--muted); font-size: 12px; margin-bottom: 20px; line-height: 1.5; }
+    .auth-card img { width: 200px; height: 200px; border-radius: 8px; background: #fff; margin-bottom: 16px; }
+    .auth-card .spinner { width: 32px; height: 32px; border: 3px solid var(--border); border-top-color: var(--accent); border-radius: 50%; animation: spin .8s linear infinite; margin: 20px auto; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .auth-card .ok-icon { font-size: 48px; margin: 12px 0; }
+    .auth-card button { background: var(--border); color: var(--muted); border: none; border-radius: 6px; padding: 6px 18px; cursor: pointer; font-size: 12px; margin-top: 8px; }
+  </style>
+</head>
+<body>
+<div id="app">
+  <nav>
+    <div class="logo">CS2 Stats</div>
+    <a data-view="overview"  class="active">Overview</a>
+    <a data-view="weapons">Weapons</a>
+    <a data-view="maps">Maps</a>
+    <a data-view="clutch">Clutch</a>
+    <a data-view="role">Role</a>
+  </nav>
+
+  <main>
+    <!-- OVERVIEW -->
+    <div id="view-overview" class="view active">
+      <h2>Overview</h2>
+      <div class="kpi-grid" id="kpi-cards"></div>
+      <div class="two-col">
+        <div>
+          <h3>K/D Trend — Last 20 Matches</h3>
+          <div class="chart-wrap"><canvas id="chart-kd" height="180"></canvas></div>
+        </div>
+        <div>
+          <h3>Win Rate by Side</h3>
+          <div class="chart-wrap"><canvas id="chart-sides" height="180"></canvas></div>
+        </div>
+      </div>
+      <div id="auth-banner" style="display:none" class="auth-banner">
+        <p><strong>Steam not connected.</strong><br>Log in to sync your GCPD match history.</p>
+        <button onclick="openAuthModal()">Login with Steam</button>
+      </div>
+      <div class="section-header">
+        <h3>Recent Sessions</h3>
+        <button class="btn-sync" id="btn-sync" onclick="triggerSync()">
+          <span id="sync-btn-icon">↻</span> Sync
+        </button>
+      </div>
+      <div class="table-wrap">
+        <table id="tbl-recent">
+          <thead><tr><th>Date</th><th>Map</th><th>Result</th><th>Score</th><th>K</th><th>D</th><th>A</th><th>K/D</th><th>ADR</th><th>HS%</th><th>MVPs</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- WEAPONS -->
+    <div id="view-weapons" class="view">
+      <h2>Weapons</h2>
+      <div class="two-col">
+        <div>
+          <h3>Accuracy % (session deltas)</h3>
+          <div id="bars-accuracy" class="chart-wrap"></div>
+        </div>
+        <div>
+          <h3>Headshot % (session deltas)</h3>
+          <div id="bars-hs" class="chart-wrap"></div>
+        </div>
+      </div>
+      <h3>Kill Share</h3>
+      <div class="chart-wrap"><canvas id="chart-killshare" height="200"></canvas></div>
+      <h3>All Weapons — Lifetime Totals</h3>
+      <div class="table-wrap">
+        <table id="tbl-weapons">
+          <thead><tr><th>Weapon</th><th>Kills</th><th>Shots</th><th>Hits</th><th>HS Kills</th><th>Acc %</th><th>HS %</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- MAPS -->
+    <div id="view-maps" class="view">
+      <h2>Maps</h2>
+      <div class="chart-wrap"><canvas id="chart-maps-wr" height="220"></canvas></div>
+      <div class="table-wrap">
+        <table id="tbl-maps">
+          <thead><tr><th>Map</th><th>Played</th><th>Wins</th><th>Win %</th><th>K/D</th><th>ADR</th><th>HS %</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- CLUTCH -->
+    <div id="view-clutch" class="view">
+      <h2>Clutch &amp; Multi-Kill</h2>
+      <div class="empty" id="clutch-empty" style="display:none">No GSI data yet. Start CS2 with the GSI config to capture round-level data.</div>
+      <div id="clutch-content">
+        <h3>Clutch by Economy Type</h3>
+        <div class="table-wrap">
+          <table id="tbl-clutch-eco">
+            <thead><tr><th>Buy Type</th><th>Attempts</th><th>Wins</th><th>Win %</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- ROLE -->
+    <div id="view-role" class="view">
+      <h2>Role Tendency</h2>
+      <div class="empty">Role data requires GSI (Phase 2). Start CS2 with the GSI config to capture entry/support/lurk timing.</div>
+    </div>
+  </main>
+</div>
+
+<div id="sync-bar">
+  <div class="dot" id="sync-dot"></div>
+  <span id="sync-status">Loading…</span>
+  <span id="auth-status" style="margin-left:auto;display:flex;align-items:center;gap:8px"></span>
+</div>
+
+<!-- Steam QR login modal -->
+<div id="auth-modal">
+  <div class="auth-card">
+    <div id="auth-modal-body"></div>
+    <button onclick="closeAuthModal()">Close</button>
+  </div>
+</div>
+
+<script>
+// ── Minimal chart lib (canvas-based, no dependencies) ──────────────────────
+
+function drawLineChart(canvas, labels, datasets, opts = {}) {
+  const ctx = canvas.getContext('2d');
+  const dpr = window.devicePixelRatio || 1;
+  const W = canvas.offsetWidth, H = canvas.offsetHeight || parseInt(canvas.getAttribute('height'));
+  canvas.width = W * dpr; canvas.height = H * dpr;
+  ctx.scale(dpr, dpr);
+
+  const PAD = { top: 16, right: 16, bottom: 32, left: 44 };
+  const cW = W - PAD.left - PAD.right;
+  const cH = H - PAD.top - PAD.bottom;
+
+  ctx.clearRect(0, 0, W, H);
+
+  const allVals = datasets.flatMap(d => d.data);
+  const minV = opts.min ?? Math.min(...allVals) * 0.9;
+  const maxV = opts.max ?? Math.max(...allVals) * 1.1;
+
+  const xOf = i => PAD.left + (i / (labels.length - 1)) * cW;
+  const yOf = v => PAD.top + cH - ((v - minV) / (maxV - minV)) * cH;
+
+  // Grid lines
+  ctx.strokeStyle = '#2a2d35'; ctx.lineWidth = 1;
+  for (let i = 0; i <= 4; i++) {
+    const y = PAD.top + (i / 4) * cH;
+    ctx.beginPath(); ctx.moveTo(PAD.left, y); ctx.lineTo(PAD.left + cW, y); ctx.stroke();
+    const val = maxV - (i / 4) * (maxV - minV);
+    ctx.fillStyle = '#7a7f8e'; ctx.font = '10px Segoe UI';
+    ctx.fillText(val.toFixed(2), 2, y + 4);
+  }
+
+  // X labels
+  ctx.fillStyle = '#7a7f8e'; ctx.font = '10px Segoe UI'; ctx.textAlign = 'center';
+  const step = Math.ceil(labels.length / 8);
+  labels.forEach((l, i) => {
+    if (i % step === 0) ctx.fillText(String(l).slice(5), xOf(i), H - PAD.bottom + 14);
+  });
+
+  // Lines
+  datasets.forEach(ds => {
+    ctx.strokeStyle = ds.color || '#f5a623';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ds.data.forEach((v, i) => {
+      i === 0 ? ctx.moveTo(xOf(i), yOf(v)) : ctx.lineTo(xOf(i), yOf(v));
+    });
+    ctx.stroke();
+
+    // Dots
+    ds.data.forEach((v, i) => {
+      ctx.beginPath();
+      ctx.arc(xOf(i), yOf(v), 3, 0, Math.PI * 2);
+      ctx.fillStyle = ds.color || '#f5a623';
+      ctx.fill();
+    });
+  });
+}
+
+function drawBarChart(canvas, labels, data, colors, opts = {}) {
+  const ctx = canvas.getContext('2d');
+  const dpr = window.devicePixelRatio || 1;
+  const W = canvas.offsetWidth, H = canvas.offsetHeight || parseInt(canvas.getAttribute('height'));
+  canvas.width = W * dpr; canvas.height = H * dpr;
+  ctx.scale(dpr, dpr);
+
+  const PAD = { top: 16, right: 16, bottom: 40, left: 44 };
+  const cW = W - PAD.left - PAD.right;
+  const cH = H - PAD.top - PAD.bottom;
+  const maxV = Math.max(...data, 1);
+
+  ctx.clearRect(0, 0, W, H);
+
+  const barW = Math.max(8, cW / labels.length * 0.6);
+  const gap  = cW / labels.length;
+
+  // Grid
+  ctx.strokeStyle = '#2a2d35'; ctx.lineWidth = 1;
+  for (let i = 0; i <= 4; i++) {
+    const y = PAD.top + (i / 4) * cH;
+    ctx.beginPath(); ctx.moveTo(PAD.left, y); ctx.lineTo(PAD.left + cW, y); ctx.stroke();
+    const val = maxV - (i / 4) * maxV;
+    ctx.fillStyle = '#7a7f8e'; ctx.font = '10px Segoe UI'; ctx.textAlign = 'right';
+    ctx.fillText(Math.round(val), PAD.left - 4, y + 4);
+  }
+
+  data.forEach((v, i) => {
+    const x = PAD.left + i * gap + gap / 2 - barW / 2;
+    const barH = (v / maxV) * cH;
+    const y = PAD.top + cH - barH;
+    ctx.fillStyle = Array.isArray(colors) ? (colors[i] || '#f5a623') : colors;
+    ctx.fillRect(x, y, barW, barH);
+
+    ctx.fillStyle = '#7a7f8e'; ctx.font = '10px Segoe UI'; ctx.textAlign = 'center';
+    const lbl = String(labels[i]);
+    ctx.fillText(lbl.length > 8 ? lbl.slice(3) : lbl, PAD.left + i * gap + gap / 2, H - PAD.bottom + 14);
+  });
+}
+
+function drawHBar(container, items, key, labelKey, color) {
+  container.innerHTML = '';
+  const max = Math.max(...items.map(x => x[key]), 1);
+  items.slice(0, 15).forEach(item => {
+    const pct = (item[key] / max * 100).toFixed(1);
+    container.innerHTML += `
+      <div class="bar-row">
+        <span class="bar-label" title="${item[labelKey]}">${item[labelKey]}</span>
+        <div class="bar-track"><div class="bar-fill" style="width:${pct}%;background:${color}"></div></div>
+        <span class="bar-val">${item[key]}%</span>
+      </div>`;
+  });
+  if (!items.length) container.innerHTML = '<div class="empty">No weapon data yet — run a sync first.</div>';
+}
+
+// ── API helpers ────────────────────────────────────────────────────────────
+
+async function api(path) {
+  const r = await fetch(path);
+  if (!r.ok) throw new Error(`${r.status} ${r.statusText}`);
+  return r.json();
+}
+
+function fmtDate(unix) {
+  return new Date(unix * 1000).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+}
+
+function kd(k, d) { return d > 0 ? (k / d).toFixed(2) : k.toFixed(2); }
+function hsPct(hs, k) { return k > 0 ? ((hs / k) * 100).toFixed(1) + '%' : '—'; }
+function acc(hits, shots) { return shots > 0 ? ((hits / shots) * 100).toFixed(1) + '%' : '—'; }
+
+// ── View loaders ──────────────────────────────────────────────────────────
+
+async function loadOverview() {
+  const [ov, recent] = await Promise.all([
+    api('/api/matches/overview'),
+    api('/api/matches?limit=20'),
+  ]);
+
+  const t = ov.totals || {};
+  const hasStats = (t.matches_with_stats ?? 0) > 0;
+  const statBase = hasStats ? t.matches_with_stats : 0;
+  const winPct   = statBase > 0 ? ((t.wins / statBase) * 100).toFixed(1) : '—';
+  const winSub   = hasStats
+    ? `${t.wins ?? 0}W ${t.losses ?? 0}L ${t.ties ?? 0}T`
+    : `${t.total_matches ?? 0} tracked, stats pending`;
+
+  const cards = [
+    { label: 'Matches', value: t.total_matches ?? 0 },
+    { label: 'Win Rate', value: hasStats ? `${winPct}%` : '—', sub: winSub },
+    { label: 'K/D', value: t.kd_ratio ?? '—' },
+    { label: 'ADR', value: t.avg_adr ?? '—' },
+    { label: 'HS%', value: t.hs_pct != null ? `${t.hs_pct}%` : '—' },
+    { label: 'Total Kills', value: t.total_kills ?? 0 },
+    { label: 'MVPs', value: t.total_mvps ?? 0 },
+  ];
+  document.getElementById('kpi-cards').innerHTML = cards.map(c => `
+    <div class="kpi">
+      <div class="label">${c.label}</div>
+      <div class="value">${c.value}</div>
+      ${c.sub ? `<div class="sub">${c.sub}</div>` : ''}
+    </div>`).join('');
+
+  // K/D trend chart
+  const trend = ov.trend || [];
+  if (trend.length > 1) {
+    const cvs = document.getElementById('chart-kd');
+    drawLineChart(cvs,
+      trend.map(m => fmtDate(m.date)),
+      [{ data: trend.map(m => m.kd || 0), color: '#f5a623' }],
+      { min: 0 }
+    );
+  }
+
+  // CT vs T placeholder (needs GSI data)
+  const cvsS = document.getElementById('chart-sides');
+  drawBarChart(cvsS, ['CT', 'T'], [0, 0], ['#5b9cf6', '#f0a040']);
+
+  // Recent matches table
+  const tbody = document.querySelector('#tbl-recent tbody');
+  const matches = recent.matches || [];
+  if (!matches.length) {
+    tbody.innerHTML = _hasToken
+      ? '<tr><td colspan="11" class="empty">No matches yet — click Sync to fetch your history.</td></tr>'
+      : '<tr><td colspan="11" class="empty">No matches yet — login with Steam to sync your history.</td></tr>';
+    return;
+  }
+  const DEMO_STATUS_LABEL = {
+    pending:     'awaiting demo parse',
+    expired:     'demo expired on Valve servers',
+    server_gone: 'replay server offline',
+    parse_error: 'demo parse failed',
+    gcpd_ok:     'awaiting demo parse',
+  };
+  const isStub = m => m.kills === 0 && m.deaths === 0 && m.demo_status !== 'gcpd_ok';
+  tbody.innerHTML = matches.map(m => {
+    if (isStub(m)) {
+      const mapLabel = m.map === 'unknown' ? '—' : m.map.replace('de_', '');
+      const statusLabel = DEMO_STATUS_LABEL[m.demo_status] ?? 'awaiting demo parse';
+      const isGone = m.demo_status === 'expired' || m.demo_status === 'server_gone';
+      return `<tr style="opacity:${isGone ? '.35' : '.5'}">
+        <td>${fmtDate(m.date)}</td>
+        <td>${mapLabel}</td>
+        <td colspan="9" style="color:var(--muted);font-style:italic">${statusLabel}</td>
+      </tr>`;
+    }
+    const adrCell = m.demo_status === 'gcpd_ok' ? '—' : m.adr.toFixed(1);
+    return `<tr>
+      <td>${fmtDate(m.date)}</td>
+      <td>${m.map.replace('de_', '')}</td>
+      <td><span class="badge badge-${m.result}">${m.result}</span></td>
+      <td>${m.score_own}–${m.score_enemy}</td>
+      <td>${m.kills}</td><td>${m.deaths}</td><td>${m.assists}</td>
+      <td>${kd(m.kills, m.deaths)}</td>
+      <td>${adrCell}</td>
+      <td>${hsPct(m.hs_count, m.kills)}</td>
+      <td>${m.mvps}</td>
+    </tr>`;
+  }).join('');
+}
+
+async function loadWeapons() {
+  const [snapshot, deltas] = await Promise.all([
+    api('/api/weapons'),
+    api('/api/weapons/deltas'),
+  ]);
+
+  // Accuracy / HS bars from deltas
+  const sorted = [...deltas].sort((a, b) => b.accuracy_pct - a.accuracy_pct);
+  drawHBar(document.getElementById('bars-accuracy'), sorted, 'accuracy_pct', 'weapon', '#5b9cf6');
+  const sortedHs = [...deltas].sort((a, b) => b.hs_pct - a.hs_pct);
+  drawHBar(document.getElementById('bars-hs'), sortedHs, 'hs_pct', 'weapon', '#f5a623');
+
+  // Kill share bar chart
+  const top10 = [...snapshot].sort((a, b) => b.kills - a.kills).slice(0, 10);
+  if (top10.length) {
+    drawBarChart(
+      document.getElementById('chart-killshare'),
+      top10.map(w => w.weapon),
+      top10.map(w => w.kills),
+      '#f5a623'
+    );
+  }
+
+  // Full table (lifetime)
+  const tbody = document.querySelector('#tbl-weapons tbody');
+  if (!snapshot.length) {
+    tbody.innerHTML = '<tr><td colspan="7" class="empty">No weapon data yet.</td></tr>';
+    return;
+  }
+  tbody.innerHTML = snapshot.map(w => `
+    <tr>
+      <td>${w.weapon}</td>
+      <td>${w.kills}</td>
+      <td>${w.shots}</td>
+      <td>${w.hits}</td>
+      <td>${w.hs}</td>
+      <td>${acc(w.hits, w.shots)}</td>
+      <td>${hsPct(w.hs, w.kills)}</td>
+    </tr>`).join('');
+}
+
+async function loadMaps() {
+  const maps = await api('/api/matches/maps');
+
+  if (!maps.length) {
+    document.getElementById('view-maps').innerHTML += '<div class="empty">No match data yet.</div>';
+    return;
+  }
+
+  // Win rate bar chart
+  drawBarChart(
+    document.getElementById('chart-maps-wr'),
+    maps.map(m => m.map),
+    maps.map(m => m.played > 0 ? ((m.wins / m.played) * 100) : 0),
+    maps.map(m => {
+      const pct = m.played > 0 ? m.wins / m.played : 0;
+      return pct >= 0.5 ? '#4caf7d' : '#e05c5c';
+    })
+  );
+
+  const tbody = document.querySelector('#tbl-maps tbody');
+  tbody.innerHTML = maps.map(m => {
+    const winPct = m.played > 0 ? ((m.wins / m.played) * 100).toFixed(1) : '0.0';
+    return `<tr>
+      <td>${m.map}</td>
+      <td>${m.played}</td>
+      <td>${m.wins}</td>
+      <td>${winPct}%</td>
+      <td>${m.kd ?? '—'}</td>
+      <td>${m.avg_adr ?? '—'}</td>
+      <td>${m.hs_pct != null ? m.hs_pct + '%' : '—'}</td>
+    </tr>`;
+  }).join('');
+}
+
+async function loadClutch() {
+  const data = await api('/api/clutch');
+  const tbody = document.querySelector('#tbl-clutch-eco tbody');
+  const eco = data.ecoClutch || [];
+  if (!eco.length) {
+    document.getElementById('clutch-empty').style.display = 'block';
+    tbody.innerHTML = '<tr><td colspan="4" class="empty">No GSI data yet.</td></tr>';
+    return;
+  }
+  tbody.innerHTML = eco.map(r => `
+    <tr><td>${r.buy_type}</td><td>${r.attempts}</td><td>${r.wins}</td><td>${r.win_pct}%</td></tr>
+  `).join('');
+}
+
+async function loadSyncStatus() {
+  try {
+    const logs = await api('/api/sync/log');
+    const latest = logs[0];
+    if (latest) {
+      const dot = document.getElementById('sync-dot');
+      dot.style.background = latest.status === 'ok' ? 'var(--win)' : 'var(--loss)';
+      document.getElementById('sync-status').textContent =
+        `Last sync: ${new Date(latest.timestamp * 1000).toLocaleString()} — ${latest.matches_fetched} match(es) fetched`;
+    } else {
+      document.getElementById('sync-status').textContent = 'No sync yet — run npm start to sync.';
+    }
+  } catch {
+    document.getElementById('sync-status').textContent = 'Could not load sync log.';
+  }
+}
+
+// ── Router ────────────────────────────────────────────────────────────────
+
+const loaders = {
+  overview: loadOverview,
+  weapons:  loadWeapons,
+  maps:     loadMaps,
+  clutch:   loadClutch,
+  role:     () => {},
+};
+
+let activeView = 'overview';
+
+function navigate(view) {
+  document.querySelectorAll('.view').forEach(el => el.classList.remove('active'));
+  document.querySelectorAll('nav a').forEach(el => el.classList.remove('active'));
+  document.getElementById(`view-${view}`).classList.add('active');
+  document.querySelector(`nav a[data-view="${view}"]`).classList.add('active');
+  activeView = view;
+  loaders[view]?.();
+}
+
+document.querySelectorAll('nav a[data-view]').forEach(a => {
+  a.addEventListener('click', () => navigate(a.dataset.view));
+});
+
+// ── Steam Auth ────────────────────────────────────────────────────────────
+
+let _authPollTimer = null;
+let _hasToken = false;
+
+function closeAuthModal() {
+  document.getElementById('auth-modal').classList.remove('open');
+  if (_authPollTimer) { clearInterval(_authPollTimer); _authPollTimer = null; }
+}
+
+function renderAuthStatus(hasToken) {
+  _hasToken = hasToken;
+  const el = document.getElementById('auth-status');
+  if (hasToken) {
+    el.innerHTML = `<span style="color:var(--win);font-size:11px">● Steam connected</span>
+      <button class="auth-btn logout" onclick="steamLogout()">Logout</button>`;
+  } else {
+    el.innerHTML = `<button class="auth-btn" onclick="openAuthModal()">Login with Steam</button>`;
+  }
+  // Show/hide the prominent auth banner in the overview
+  const banner = document.getElementById('auth-banner');
+  if (banner) banner.style.display = hasToken ? 'none' : 'flex';
+  // Disable sync button when not authed
+  const btn = document.getElementById('btn-sync');
+  if (btn) btn.disabled = !hasToken;
+}
+
+async function checkAuth() {
+  try {
+    const r = await api('/api/auth/check');
+    renderAuthStatus(r.hasToken);
+  } catch { /* ignore */ }
+}
+
+// ── Sync trigger ───────────────────────────────────────────────────────────
+
+let _syncing = false;
+
+async function triggerSync() {
+  if (_syncing) return;
+  _syncing = true;
+
+  const btn  = document.getElementById('btn-sync');
+  const icon = document.getElementById('sync-btn-icon');
+  btn.disabled = true;
+  icon.className = 'spin';
+
+  try {
+    const r = await fetch('/api/sync/trigger', { method: 'POST' });
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`);
+    await loadSyncStatus();
+    await loadOverview();
+  } catch (err) {
+    // Surface the error briefly in the sync bar
+    const statusEl = document.getElementById('sync-status');
+    const prev = statusEl.textContent;
+    statusEl.textContent = `Sync failed: ${err.message}`;
+    setTimeout(() => { statusEl.textContent = prev; }, 5000);
+  } finally {
+    _syncing = false;
+    icon.className = '';
+    icon.textContent = '↻';
+    btn.disabled = !_hasToken;
+  }
+}
+
+async function openAuthModal() {
+  const modal = document.getElementById('auth-modal');
+  const body  = document.getElementById('auth-modal-body');
+  modal.classList.add('open');
+  body.innerHTML = `<h3>Login with Steam</h3><p>Starting QR login…</p><div class="spinner"></div>`;
+
+  let res;
+  try {
+    res = await fetch('/api/auth/start', { method: 'POST' });
+    res = await res.json();
+  } catch (err) {
+    body.innerHTML = `<h3>Error</h3><p style="color:var(--loss)">${err.message}</p>`;
+    return;
+  }
+
+  if (res.qrDataUrl) {
+    body.innerHTML = `
+      <h3>Login with Steam</h3>
+      <p>Scan with your <strong>Steam mobile app</strong> then tap <strong>Approve</strong>.<br>
+         QR code refreshes automatically.</p>
+      <img id="qr-img" src="${res.qrDataUrl}" alt="Steam QR code" />
+      <p style="color:var(--muted);font-size:11px" id="qr-hint">Waiting for approval…</p>`;
+  }
+
+  // Poll for status
+  _authPollTimer = setInterval(async () => {
+    try {
+      const s = await api('/api/auth/status');
+      // Update QR image if it rotated
+      if (s.qrDataUrl) {
+        const img = document.getElementById('qr-img');
+        if (img && img.src !== s.qrDataUrl) img.src = s.qrDataUrl;
+      }
+      if (s.status === 'ok') {
+        clearInterval(_authPollTimer); _authPollTimer = null;
+        body.innerHTML = `<h3>Logged in!</h3>
+          <div class="ok-icon">✓</div>
+          <p>Steam session active.<br>Demo downloads will now use your session.</p>`;
+        renderAuthStatus(true);
+        setTimeout(closeAuthModal, 2000);
+        loadOverview(); // refresh match table
+      } else if (s.status === 'error') {
+        clearInterval(_authPollTimer); _authPollTimer = null;
+        document.getElementById('qr-hint').textContent = `Error: ${s.error}`;
+      }
+    } catch { /* ignore transient errors */ }
+  }, 2000);
+}
+
+async function steamLogout() {
+  await fetch('/api/auth/logout', { method: 'DELETE' });
+  renderAuthStatus(false);
+}
+
+// Init — check auth first so _hasToken is set before overview renders
+checkAuth().then(() => navigate('overview'));
+loadSyncStatus();
+</script>
+</body>
+</html>

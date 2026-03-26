@@ -1,0 +1,7 @@
+{
+  "steamId":            "YOUR_STEAM_ID_64",
+  "port":               3000,
+  "refreshToken":       "",
+  "steamSessionCookie": "",
+  "steamApiKey":        ""
+}
