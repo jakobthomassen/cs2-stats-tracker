@@ -3,7 +3,7 @@ import fs from 'fs';
 import path from 'path';
 import { startQrLogin, getQrState, getSteamCookie, invalidateCookieCache } from '../../auth/steamAuth';
 import { syncFromGcpd } from '../../sync/gcpdFetcher';
-import { parseAllStubMatches } from '../../sync/parseDemos';
+import { parseAllDemos } from '../../sync/parseDemos';
 
 const router = Router();
 const CONFIG_PATH = path.join(process.cwd(), 'config.json');
@@ -25,9 +25,9 @@ router.post('/start', async (_req: Request, res: Response) => {
     await startQrLogin(async (refreshToken) => {
       console.log('[auth] Login complete — triggering GCPD sync with new session.');
       try {
-        const cookie  = await getSteamCookie(refreshToken);
-        const demoUrls = await syncFromGcpd(cookie, cfg.steamId);
-        if (demoUrls.size > 0) await parseAllStubMatches(cfg.steamId, cookie, demoUrls);
+        const cookie = await getSteamCookie(refreshToken);
+        await syncFromGcpd(cookie, cfg.steamId);
+        await parseAllDemos(cfg.steamId, cookie);
       } catch (err) {
         console.error('[auth] Post-login sync failed:', err);
       }

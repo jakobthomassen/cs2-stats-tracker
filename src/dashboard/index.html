@@ -27,9 +27,10 @@
     nav .logo { padding: 0 20px 24px; font-size: 16px; font-weight: 700; color: var(--accent); letter-spacing: .5px; }
     nav a { display: block; padding: 10px 20px; color: var(--muted); text-decoration: none; cursor: pointer; transition: color .15s, background .15s; }
     nav a:hover, nav a.active { color: var(--text); background: rgba(255,255,255,.05); }
+    nav a:hover { border-left: 2px solid rgba(245,166,35,.4); }
     nav a.active { border-left: 2px solid var(--accent); }
 
-    main { flex: 1; overflow-y: auto; padding: 28px 32px; }
+    main { flex: 1; overflow-y: auto; padding: 28px 32px; scrollbar-width: thin; scrollbar-color: #444 #1a1a1a; }
     .view { display: none; }
     .view.active { display: block; }
 
@@ -37,10 +38,10 @@
     h3 { font-size: 13px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .8px; margin-bottom: 12px; }
 
     /* KPI Cards */
-    .kpi-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 14px; margin-bottom: 28px; }
-    .kpi { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 16px; }
+    .kpi-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 14px; margin-bottom: 28px; align-items: stretch; }
+    .kpi { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 16px; min-height: 90px; }
     .kpi .label { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .8px; margin-bottom: 6px; }
-    .kpi .value { font-size: 26px; font-weight: 700; color: var(--text); }
+    .kpi .value { font-size: 28px; font-weight: 700; color: var(--text); }
     .kpi .sub { font-size: 11px; color: var(--muted); margin-top: 4px; }
 
     /* Tables */
@@ -52,9 +53,10 @@
     tr:hover td { background: rgba(255,255,255,.025); }
 
     /* Charts (canvas) */
-    .chart-wrap { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 20px; margin-bottom: 24px; }
-    canvas { max-width: 100%; }
+    .chart-wrap { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 20px; margin-bottom: 24px; display: flex; flex-direction: column; }
+    canvas { width: 100%; display: block; }
 
+    /* Grid helpers */
     /* Bar component */
     .bar-row { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
     .bar-row .bar-label { width: 100px; font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -71,6 +73,8 @@
     /* Grid helpers */
     .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
     @media (max-width: 900px) { .two-col { grid-template-columns: 1fr; } }
+    .three-col { display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; }
+    @media (max-width: 1100px) { .three-col { grid-template-columns: 1fr; } }
 
     /* Sync status bar */
     #sync-bar { position: fixed; bottom: 0; left: 0; right: 0; height: 30px; background: var(--surface); border-top: 1px solid var(--border); display: flex; align-items: center; padding: 0 20px; font-size: 11px; color: var(--muted); gap: 12px; z-index: 100; }
@@ -106,6 +110,14 @@
     @keyframes spin { to { transform: rotate(360deg); } }
     .auth-card .ok-icon { font-size: 48px; margin: 12px 0; }
     .auth-card button { background: var(--border); color: var(--muted); border: none; border-radius: 6px; padding: 6px 18px; cursor: pointer; font-size: 12px; margin-top: 8px; }
+
+    /* Pagination */
+    .pagination { display: flex; gap: 4px; align-items: center; justify-content: center; margin-top: 12px; }
+    .pg-btn { background: transparent; border: 1px solid var(--border); color: var(--muted); border-radius: 4px; padding: 3px 9px; font-size: 12px; cursor: pointer; min-width: 28px; }
+    .pg-btn.active { border-color: var(--accent); color: var(--accent); background: rgba(245,166,35,.08); }
+    .pg-btn:hover:not(.active):not(:disabled) { border-color: var(--text); color: var(--text); }
+    .pg-btn:disabled { opacity: .3; cursor: default; }
+    .pg-ellipsis { color: var(--muted); padding: 3px 4px; font-size: 12px; }
   </style>
 </head>
 <body>
@@ -124,14 +136,18 @@
     <div id="view-overview" class="view active">
       <h2>Overview</h2>
       <div class="kpi-grid" id="kpi-cards"></div>
-      <div class="two-col">
+      <div class="three-col">
         <div>
           <h3>K/D Trend — Last 20 Matches</h3>
-          <div class="chart-wrap"><canvas id="chart-kd" height="180"></canvas></div>
+          <div class="chart-wrap"><canvas id="chart-kd" height="160"></canvas></div>
+        </div>
+        <div>
+          <h3>Aim Rating — Last 20 Matches</h3>
+          <div class="chart-wrap"><canvas id="chart-aim" height="160"></canvas></div>
         </div>
         <div>
           <h3>Win Rate by Side</h3>
-          <div class="chart-wrap"><canvas id="chart-sides" height="180"></canvas></div>
+          <div class="chart-wrap"><canvas id="chart-sides" height="160"></canvas></div>
         </div>
       </div>
       <div id="auth-banner" style="display:none" class="auth-banner">
@@ -145,11 +161,23 @@
         </button>
       </div>
       <div class="table-wrap">
-        <table id="tbl-recent">
-          <thead><tr><th>Date</th><th>Map</th><th>Result</th><th>Score</th><th>K</th><th>D</th><th>A</th><th>K/D</th><th>ADR</th><th>HS%</th><th>MVPs</th></tr></thead>
+        <table id="tbl-recent" style="table-layout:fixed">
+          <colgroup>
+            <col style="width:76px"><col style="width:72px"><col style="width:52px"><col style="width:58px">
+            <col style="width:36px"><col style="width:36px"><col style="width:36px"><col style="width:52px">
+            <col style="width:50px"><col style="width:50px"><col style="width:50px">
+            <col style="width:62px"><col style="width:60px"><col style="width:46px">
+          </colgroup>
+          <thead><tr>
+            <th>Date</th><th>Map</th><th>Result</th><th>Score</th>
+            <th>K</th><th>D</th><th>A</th><th>K/D</th>
+            <th>ADR</th><th>HS%</th><th>MVPs</th>
+            <th style="text-align:right">TTD ms</th><th>Xhair°</th><th title="Composite aim score 0–100">Aim</th>
+          </tr></thead>
           <tbody></tbody>
         </table>
       </div>
+      <div id="pagination-recent" class="pagination"></div>
     </div>
 
     <!-- WEAPONS -->
@@ -241,7 +269,7 @@ function drawLineChart(canvas, labels, datasets, opts = {}) {
 
   ctx.clearRect(0, 0, W, H);
 
-  const allVals = datasets.flatMap(d => d.data);
+  const allVals = datasets.flatMap(d => d.data).filter(v => v != null);
   const minV = opts.min ?? Math.min(...allVals) * 0.9;
   const maxV = opts.max ?? Math.max(...allVals) * 1.1;
 
@@ -265,18 +293,22 @@ function drawLineChart(canvas, labels, datasets, opts = {}) {
     if (i % step === 0) ctx.fillText(String(l).slice(5), xOf(i), H - PAD.bottom + 14);
   });
 
-  // Lines
+  // Lines (null values create gaps)
   datasets.forEach(ds => {
     ctx.strokeStyle = ds.color || '#f5a623';
     ctx.lineWidth = 2;
     ctx.beginPath();
+    let inSegment = false;
     ds.data.forEach((v, i) => {
-      i === 0 ? ctx.moveTo(xOf(i), yOf(v)) : ctx.lineTo(xOf(i), yOf(v));
+      if (v == null) { inSegment = false; return; }
+      if (!inSegment) { ctx.moveTo(xOf(i), yOf(v)); inSegment = true; }
+      else ctx.lineTo(xOf(i), yOf(v));
     });
     ctx.stroke();
 
-    // Dots
+    // Dots (skip null)
     ds.data.forEach((v, i) => {
+      if (v == null) return;
       ctx.beginPath();
       ctx.arc(xOf(i), yOf(v), 3, 0, Math.PI * 2);
       ctx.fillStyle = ds.color || '#f5a623';
@@ -295,11 +327,11 @@ function drawBarChart(canvas, labels, data, colors, opts = {}) {
   const PAD = { top: 16, right: 16, bottom: 40, left: 44 };
   const cW = W - PAD.left - PAD.right;
   const cH = H - PAD.top - PAD.bottom;
-  const maxV = Math.max(...data, 1);
+  const maxV = opts.pct ? 100 : Math.max(...data, 1);
 
   ctx.clearRect(0, 0, W, H);
 
-  const barW = Math.max(8, cW / labels.length * 0.6);
+  const barW = opts.barThickness ?? Math.max(8, cW / labels.length * 0.6);
   const gap  = cW / labels.length;
 
   // Grid
@@ -309,7 +341,7 @@ function drawBarChart(canvas, labels, data, colors, opts = {}) {
     ctx.beginPath(); ctx.moveTo(PAD.left, y); ctx.lineTo(PAD.left + cW, y); ctx.stroke();
     const val = maxV - (i / 4) * maxV;
     ctx.fillStyle = '#7a7f8e'; ctx.font = '10px Segoe UI'; ctx.textAlign = 'right';
-    ctx.fillText(Math.round(val), PAD.left - 4, y + 4);
+    ctx.fillText(opts.pct ? `${Math.round(val)}%` : Math.round(val), PAD.left - 4, y + 4);
   }
 
   data.forEach((v, i) => {
@@ -356,12 +388,58 @@ function kd(k, d) { return d > 0 ? (k / d).toFixed(2) : k.toFixed(2); }
 function hsPct(hs, k) { return k > 0 ? ((hs / k) * 100).toFixed(1) + '%' : '—'; }
 function acc(hits, shots) { return shots > 0 ? ((hits / shots) * 100).toFixed(1) + '%' : '—'; }
 
+// ── Pagination helpers ────────────────────────────────────────────────────
+
+function getPageButtons(current, total) {
+  if (total <= 7) return Array.from({ length: total }, (_, i) => i + 1);
+  if (current <= 4) return [1, 2, 3, 4, 5, '...', total];
+  if (current >= total - 3) return [1, '...', total - 4, total - 3, total - 2, total - 1, total];
+  return [1, '...', current - 1, current, current + 1, '...', total];
+}
+
+function renderPagination(totalPages, currentPage) {
+  const pg = document.getElementById('pagination-recent');
+  pg.innerHTML = '';
+  if (totalPages <= 1) return;
+
+  const prev = document.createElement('button');
+  prev.className = 'pg-btn'; prev.textContent = '←';
+  prev.disabled = currentPage === 1;
+  prev.onclick = () => loadOverview(currentPage - 1);
+  pg.appendChild(prev);
+
+  getPageButtons(currentPage, totalPages).forEach(p => {
+    if (p === '...') {
+      const span = document.createElement('span');
+      span.className = 'pg-ellipsis'; span.textContent = '…';
+      pg.appendChild(span);
+    } else {
+      const btn = document.createElement('button');
+      btn.className = 'pg-btn' + (p === currentPage ? ' active' : '');
+      btn.textContent = p;
+      btn.onclick = () => loadOverview(p);
+      pg.appendChild(btn);
+    }
+  });
+
+  const next = document.createElement('button');
+  next.className = 'pg-btn'; next.textContent = '→';
+  next.disabled = currentPage === totalPages;
+  next.onclick = () => loadOverview(currentPage + 1);
+  pg.appendChild(next);
+}
+
 // ── View loaders ──────────────────────────────────────────────────────────
 
-async function loadOverview() {
+const PAGE_SIZE = 20;
+let _currentPage = 1;
+
+async function loadOverview(page = 1) {
+  _currentPage = page;
+  const offset = (page - 1) * PAGE_SIZE;
   const [ov, recent] = await Promise.all([
     api('/api/matches/overview'),
-    api('/api/matches?limit=20'),
+    api(`/api/matches?limit=${PAGE_SIZE}&offset=${offset}`),
   ]);
 
   const t = ov.totals || {};
@@ -378,6 +456,7 @@ async function loadOverview() {
     { label: 'K/D', value: t.kd_ratio ?? '—' },
     { label: 'ADR', value: t.avg_adr ?? '—' },
     { label: 'HS%', value: t.hs_pct != null ? `${t.hs_pct}%` : '—' },
+    { label: 'Aim Rating', value: t.avg_aim_rating != null ? t.avg_aim_rating : '—' },
     { label: 'Total Kills', value: t.total_kills ?? 0 },
     { label: 'MVPs', value: t.total_mvps ?? 0 },
   ];
@@ -390,48 +469,73 @@ async function loadOverview() {
 
   // K/D trend chart
   const trend = ov.trend || [];
+  const labels = trend.map(m => fmtDate(m.date));
   if (trend.length > 1) {
     const cvs = document.getElementById('chart-kd');
-    drawLineChart(cvs,
-      trend.map(m => fmtDate(m.date)),
-      [{ data: trend.map(m => m.kd || 0), color: '#f5a623' }],
-      { min: 0 }
-    );
+    const kdVals = trend.map(m => m.kd || 0);
+    const maxKD = Math.max(...kdVals);
+    drawLineChart(cvs, labels, [{ data: kdVals, color: '#f5a623' }],
+      { min: 0, max: Math.min(maxKD * 1.15, 4.5) });
+  }
+
+  // Aim Rating chart (null = no demo data for that match)
+  if (trend.length > 1) {
+    const cvsA = document.getElementById('chart-aim');
+    const aimVals = trend.map(m => m.aim_rating ?? null);
+    const hasAim = aimVals.some(v => v != null);
+    if (hasAim) {
+      drawLineChart(cvsA, labels, [{ data: aimVals, color: '#5b9cf6' }], { min: 0, max: 100 });
+    } else {
+      const ctx = cvsA.getContext('2d');
+      const dpr = window.devicePixelRatio || 1;
+      const cH = cvsA.offsetHeight || parseInt(cvsA.getAttribute('height')) || 160;
+      cvsA.width = cvsA.offsetWidth * dpr; cvsA.height = cH * dpr;
+      ctx.scale(dpr, dpr);
+      ctx.fillStyle = '#7a7f8e'; ctx.font = '12px Segoe UI'; ctx.textAlign = 'center';
+      ctx.fillText('No aim data — run a sync with demos', cvsA.offsetWidth / 2, cH / 2);
+    }
   }
 
   // CT vs T placeholder (needs GSI data)
   const cvsS = document.getElementById('chart-sides');
-  drawBarChart(cvsS, ['CT', 'T'], [0, 0], ['#5b9cf6', '#f0a040']);
+  drawBarChart(cvsS, ['CT', 'T'], [0, 0], ['#5b9cf6', '#f0a040'], { pct: true, barThickness: 56 });
 
   // Recent matches table
   const tbody = document.querySelector('#tbl-recent tbody');
   const matches = recent.matches || [];
   if (!matches.length) {
     tbody.innerHTML = _hasToken
-      ? '<tr><td colspan="11" class="empty">No matches yet — click Sync to fetch your history.</td></tr>'
-      : '<tr><td colspan="11" class="empty">No matches yet — login with Steam to sync your history.</td></tr>';
+      ? '<tr><td colspan="14" class="empty">No matches yet — click Sync to fetch your history.</td></tr>'
+      : '<tr><td colspan="14" class="empty">No matches yet — login with Steam to sync your history.</td></tr>';
+    renderPagination(0, 1);
     return;
   }
   const DEMO_STATUS_LABEL = {
-    pending:     'awaiting demo parse',
-    expired:     'demo expired on Valve servers',
-    server_gone: 'replay server offline',
-    parse_error: 'demo parse failed',
-    gcpd_ok:     'awaiting demo parse',
+    queued:     'demo download queued',
+    downloaded: 'demo downloaded, parsing pending',
+    corrupt:    'demo parse failed',
+    expired:    'demo expired on Valve servers',
+    no_demo:    'no replay available',
   };
-  const isStub = m => m.kills === 0 && m.deaths === 0 && m.demo_status !== 'gcpd_ok';
+  const isStub = m => m.kills === 0 && m.deaths === 0;
   tbody.innerHTML = matches.map(m => {
     if (isStub(m)) {
       const mapLabel = m.map === 'unknown' ? '—' : m.map.replace('de_', '');
       const statusLabel = DEMO_STATUS_LABEL[m.demo_status] ?? 'awaiting demo parse';
-      const isGone = m.demo_status === 'expired' || m.demo_status === 'server_gone';
+      const isGone = m.demo_status === 'expired' || m.demo_status === 'no_demo';
       return `<tr style="opacity:${isGone ? '.35' : '.5'}">
         <td>${fmtDate(m.date)}</td>
         <td>${mapLabel}</td>
-        <td colspan="9" style="color:var(--muted);font-style:italic">${statusLabel}</td>
+        <td colspan="12" style="color:var(--muted);font-style:italic">${statusLabel}</td>
       </tr>`;
     }
-    const adrCell = m.demo_status === 'gcpd_ok' ? '—' : m.adr.toFixed(1);
+    const adrCell   = m.demo_status === 'parsed' ? m.adr.toFixed(1) : '—';
+    const adrTitle  = m.demo_status !== 'parsed' ? ' title="ADR requires demo download"' : '';
+    const hasAim    = m.aim_sample_count != null && m.aim_sample_count >= 5;
+    const dimStyle  = hasAim ? '' : 'color:var(--muted);';
+    const ttdCell   = hasAim && m.ttd_ms_rifle   != null ? m.ttd_ms_rifle   : '—';
+    const xhCell    = hasAim && m.xhair_deg_rifle != null ? m.xhair_deg_rifle + '°' : '—';
+    const aimCell   = hasAim && m.aim_rating      != null ? m.aim_rating     : '—';
     return `<tr>
       <td>${fmtDate(m.date)}</td>
       <td>${m.map.replace('de_', '')}</td>
@@ -439,11 +543,17 @@ async function loadOverview() {
       <td>${m.score_own}–${m.score_enemy}</td>
       <td>${m.kills}</td><td>${m.deaths}</td><td>${m.assists}</td>
       <td>${kd(m.kills, m.deaths)}</td>
-      <td>${adrCell}</td>
+      <td${adrTitle}>${adrCell}</td>
       <td>${hsPct(m.hs_count, m.kills)}</td>
       <td>${m.mvps}</td>
+      <td style="text-align:right;${dimStyle}">${ttdCell}</td>
+      <td style="${dimStyle}">${xhCell}</td>
+      <td style="${dimStyle}" title="Composite aim score 0–100">${aimCell}</td>
     </tr>`;
   }).join('');
+
+  const totalPages = Math.ceil((recent.total ?? 0) / PAGE_SIZE);
+  renderPagination(totalPages, page);
 }
 
 async function loadWeapons() {
@@ -629,7 +739,7 @@ async function triggerSync() {
     const data = await r.json();
     if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`);
     await loadSyncStatus();
-    await loadOverview();
+    await loadOverview(1);
   } catch (err) {
     // Surface the error briefly in the sync bar
     const statusEl = document.getElementById('sync-status');

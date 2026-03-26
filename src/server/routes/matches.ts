@@ -47,13 +47,14 @@ router.get('/overview', (_req: Request, res: Response) => {
       COALESCE(SUM(CASE WHEN kills > 0 THEN kills END), 0)             AS total_kills,
       COALESCE(SUM(CASE WHEN kills > 0 THEN deaths END), 0)            AS total_deaths,
       COALESCE(SUM(CASE WHEN kills > 0 THEN mvps END), 0)              AS total_mvps,
-      SUM(CASE WHEN kills > 0 THEN 1 ELSE 0 END)                       AS matches_with_stats
+      SUM(CASE WHEN kills > 0 THEN 1 ELSE 0 END)                       AS matches_with_stats,
+      ROUND(AVG(CASE WHEN aim_rating IS NOT NULL THEN aim_rating END), 1) AS avg_aim_rating
     FROM matches
   `).get();
 
-  // K/D trend — last 20 matches with real stats
+  // K/D + aim_rating trend — last 20 matches with real stats
   const trend = db.prepare(`
-    SELECT date, ROUND(CAST(kills AS REAL) / NULLIF(deaths,0), 2) AS kd, map, result
+    SELECT date, ROUND(CAST(kills AS REAL) / NULLIF(deaths,0), 2) AS kd, map, result, aim_rating
     FROM matches
     WHERE kills > 0
     ORDER BY date DESC

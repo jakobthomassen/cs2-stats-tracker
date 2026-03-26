@@ -18,8 +18,16 @@ CREATE TABLE IF NOT EXISTS matches (
   adr           REAL NOT NULL DEFAULT 0,
   mvps          INTEGER NOT NULL DEFAULT 0,
   ping          INTEGER NOT NULL DEFAULT 0,
-  demo_status   TEXT    NOT NULL DEFAULT 'pending'
-    CHECK(demo_status IN ('pending','ok','expired','server_gone','parse_error','gcpd_ok'))
+  demo_status   TEXT    NOT NULL DEFAULT 'no_demo'
+    CHECK(demo_status IN ('queued','downloaded','parsed','corrupt','expired','no_demo')),
+  demo_url      TEXT,
+  ttd_ms_rifle      REAL,
+  ttd_ms_awp        REAL,
+  xhair_deg_rifle   REAL,
+  xhair_deg_awp     REAL,
+  spotted_acc       REAL,
+  aim_rating        REAL,
+  aim_sample_count  INTEGER
 );
 
 CREATE TABLE IF NOT EXISTS weapon_snapshots (

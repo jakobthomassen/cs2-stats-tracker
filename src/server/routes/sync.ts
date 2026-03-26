@@ -4,7 +4,7 @@ import path from 'path';
 import { getDb } from '../../db/database';
 import { getSteamCookie } from '../../auth/steamAuth';
 import { syncFromGcpd } from '../../sync/gcpdFetcher';
-import { parseAllStubMatches } from '../../sync/parseDemos';
+import { parseAllDemos } from '../../sync/parseDemos';
 
 const router = Router();
 const CONFIG_PATH = path.join(process.cwd(), 'config.json');
@@ -51,12 +51,8 @@ router.post('/trigger', async (_req: Request, res: Response) => {
   let errorMessage: string | undefined;
 
   try {
-    const demoUrls = await syncFromGcpd(cookie, cfg.steamId);
-    newMatches = demoUrls.size;
-
-    if (demoUrls.size > 0) {
-      await parseAllStubMatches(cfg.steamId, cookie, demoUrls);
-    }
+    newMatches = await syncFromGcpd(cookie, cfg.steamId);
+    await parseAllDemos(cfg.steamId, cookie);
   } catch (err) {
     status = 'error';
     errorMessage = (err as Error).message;

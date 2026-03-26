@@ -5,6 +5,33 @@ import path from 'path';
 
 const CONFIG_PATH = path.join(process.cwd(), 'config.json');
 
+// ── Cookie helpers ────────────────────────────────────────────────────────────
+
+/**
+ * getWebCookies() returns steamLoginSecure for every Steam domain (store, community,
+ * help, checkout, etc.). We need only the one with audience "web:community" for
+ * steamcommunity.com requests. Pair it with the first sessionid found.
+ */
+function extractCommunityLoginSecure(cookies: string[]): string {
+  const nameValues = cookies.map(c => c.split(';')[0].trim());
+
+  const communityToken = nameValues
+    .filter(c => c.startsWith('steamLoginSecure='))
+    .find(c => {
+      try {
+        const jwt = c.split('=').slice(1).join('=');
+        const decoded = decodeURIComponent(jwt);
+        const payload = decoded.split('||')[1];
+        const parsed = JSON.parse(Buffer.from(payload.split('.')[1], 'base64').toString());
+        return parsed.aud?.includes('web:community');
+      } catch { return false; }
+    });
+
+  const sessionId = nameValues.find(c => c.startsWith('sessionid=')) ?? '';
+
+  return [communityToken, sessionId].filter(Boolean).join('; ');
+}
+
 // ── Cookie cache (in-memory, ~20h TTL) ───────────────────────────────────────
 
 let _cachedCookie: string | null = null;
@@ -23,8 +50,29 @@ export async function getSteamCookie(refreshToken: string): Promise<string> {
   session.refreshToken = refreshToken;
   const cookies = await session.getWebCookies();
 
-  _cachedCookie = cookies.join('; ');
-  _cookieExpiry = Date.now() + 20 * 60 * 60 * 1000; // 20 h
+  // getWebCookies() returns cookies for ALL Steam domains (store, community, help, etc.)
+  // with duplicate steamLoginSecure entries per domain. We need only the one whose
+  // JWT audience is "web:community" for steamcommunity.com requests.
+  _cachedCookie = extractCommunityLoginSecure(cookies);
+
+  // Derive expiry from the JWT exp field inside steamLoginSecure so we don't
+  // serve a cached cookie past its actual expiry.
+  // steamLoginSecure value format: "<steamId>||<JWT header>.<payload>.<sig>"
+  _cookieExpiry = Date.now() + 20 * 60 * 60 * 1000; // fallback: 20 h
+  try {
+    const secureValue = _cachedCookie.split('; ')
+      .find(c => c.startsWith('steamLoginSecure='))
+      ?.split('=').slice(1).join('=') ?? '';
+    const jwtPart = decodeURIComponent(secureValue).split('||')[1] ?? '';
+    const payloadB64 = jwtPart.split('.')[1] ?? '';
+    if (payloadB64) {
+      const payload = JSON.parse(Buffer.from(payloadB64, 'base64url').toString('utf-8'));
+      if (typeof payload.exp === 'number') {
+        _cookieExpiry = payload.exp * 1000;
+        console.log(`[auth] JWT exp: ${new Date(_cookieExpiry).toISOString()}`);
+      }
+    }
+  } catch { /* non-fatal — fallback TTL already set */ }
   console.log('[auth] Steam web cookies refreshed.');
   return _cachedCookie;
 }
@@ -90,7 +138,9 @@ export async function startQrLogin(
       console.error('[auth] Could not save refresh token:', err);
     }
 
-    onAuthenticated(refreshToken);
+    Promise.resolve(onAuthenticated(refreshToken)).catch(err => {
+      console.error('[auth] Post-login callback failed:', err);
+    });
   });
 
   session.on('error', (err: Error) => {

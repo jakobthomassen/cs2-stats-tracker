@@ -20,16 +20,16 @@
 import axios from 'axios';
 import * as cheerio from 'cheerio';
 import fs from 'fs';
+import path from 'path';
 import { getDb } from '../db/database';
 import { insertGcpdMatch } from './matchFetcher';
 
 const TABS      = ['matchhistorypremier', 'matchhistorycomp'];
-const PAGE_LIMIT = 2;  // ← raise after verifying correctness
-const DEBUG_SINGLE_MATCH = true;  // ← set false after debugging
+const PAGE_LIMIT = 100; // pages per tab — well above any realistic match history
 
 const HEADERS = {
   'User-Agent':       'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124 Safari/537.36',
-  'Accept':           'text/html,application/xhtml+xml,*/*;q=0.9',
+  'Accept':           'application/json, text/javascript, */*; q=0.01',
   'Accept-Language':  'en-US,en;q=0.9',
   'X-Requested-With': 'XMLHttpRequest',
 };
@@ -37,7 +37,8 @@ const HEADERS = {
 // ── Parsed stats from one match block ─────────────────────────────────────────
 
 interface MatchBlock {
-  reservationId: string;
+  matchId:       string;         // reservationId when demo link present; synthetic 'gcpd_<date>_<s1>_<s2>' otherwise
+  reservationId: string | null;  // null when demo link has expired
   downloadUrl:   string | null;  // only present for ~12 most recent matches
   map:           string;
   date:          number;         // unix timestamp
@@ -76,17 +77,18 @@ function parseOneBlock(
   const rightEl: any = $(leftEl).closest('td').next('td').find('.csgo_scoreboard_inner_right');
 
   // ── Demo URL & reservationId ──────────────────────────────────────────────
-  const demoHref = $(leftEl).find('a[href*=".dem.bz2"]').first().attr('href') ?? null;
-  let reservationId: string;
+  const demoHref     = $(leftEl).find('a[href*=".dem.bz2"]').first().attr('href') ?? null;
+  let reservationId: string | null = null;
 
   if (demoHref) {
     const m = demoHref.match(/\/0*(\d+)_\d+\.dem\.bz2/);
     if (!m) return null;
     reservationId = String(BigInt(m[1]));
-  } else {
-    // No demo link — skip (can't identify the match without a reservationId)
-    return null;
   }
+  // If no demo link the match is too old for Valve's replay servers.
+  // We still insert it using a synthetic match_id derived from date+score.
+  // (Two 13:8 Ancient games are distinguishable because they start at different
+  //  unix seconds; we add kills as a tiebreaker for the astronomically rare case.)
 
   // ── Match metadata (left panel) ───────────────────────────────────────────
   const leftTds = $(leftEl)
@@ -158,7 +160,11 @@ function parseOneBlock(
   const hspPct   = parseFloat($(cells[6]).text().trim().replace('%', '')) || 0;
   const hs_count = Math.round(kills * hspPct / 100);
 
+  const matchId = reservationId
+    ?? `gcpd_${date}_${score_own}_${score_enemy}_${kills}`;
+
   return {
+    matchId,
     reservationId,
     downloadUrl: demoHref,
     map: mapName,
@@ -181,87 +187,116 @@ function parseOneBlock(
 
 /**
  * Parse and insert all new match blocks from one HTML page.
+ * For existing matches that are still awaiting a demo, refreshes demo_url in DB.
  * @returns inserted count and whether we hit an already-known match.
  */
 function processPage(
-  db:       ReturnType<typeof getDb>,
-  html:     string,
-  steamId:  string,
-  demoUrls: Map<string, string>,
-): { inserted: number; done: boolean } {
+  db:      ReturnType<typeof getDb>,
+  html:    string,
+  steamId: string,
+): { inserted: number; done: boolean; pageEntries: number } {
   const $ = cheerio.load(html);
-  let inserted = 0;
-  let done     = false;
+  let inserted    = 0;
+  let hitExisting = false;
 
-  // .csgo_scoreboard_root is a single wrapper for the whole page.
-  // Each match is one <tr> containing an inner_left + inner_right pair.
-  // Iterate over inner_left elements — one per match.
-  $('.csgo_scoreboard_inner_left').each((_i, leftEl) => {
-    if (done) return;
+  const leftPanels = $('.csgo_scoreboard_inner_left').toArray();
 
+  for (const leftEl of leftPanels) {
     const block = parseOneBlock($, leftEl, steamId);
-    if (!block) return;
+    if (!block) continue;
 
-    // Stop if we've already seen this match
-    const exists = db.prepare(
-      `SELECT 1 FROM matches WHERE reservation_id = ? OR match_id = ?`
-    ).get(block.reservationId, block.reservationId);
+    type ExistingRow = { demo_status: string };
+    const existing: ExistingRow | undefined = block.reservationId
+      ? db.prepare(`SELECT demo_status FROM matches WHERE match_id = ? OR reservation_id = ?`)
+           .get(block.matchId, block.reservationId) as ExistingRow | undefined
+      : db.prepare(`SELECT demo_status FROM matches WHERE match_id = ? OR (date = ? AND map = ? AND score_own = ? AND score_enemy = ? AND kills = ?)`)
+           .get(block.matchId, block.date, block.map, block.score_own, block.score_enemy, block.kills) as ExistingRow | undefined;
 
-    if (exists) {
-      done = true;
-      return;
+    if (existing) {
+      // Refresh the stored demo_url for matches still waiting to be downloaded.
+      // URLs rotate with each Steam session; keeping them current avoids stale-URL failures.
+      if (['queued', 'corrupt'].includes(existing.demo_status)) {
+        if (block.downloadUrl) {
+          db.prepare(`UPDATE matches SET demo_url = ? WHERE match_id = ?`)
+            .run(block.downloadUrl, block.matchId);
+        } else {
+          // Match visible on GCPD without a demo link — Valve has removed the replay.
+          db.prepare(`UPDATE matches SET demo_status = 'expired', demo_url = NULL WHERE match_id = ?`)
+            .run(block.matchId);
+        }
+      }
+      hitExisting = true;
+      continue;
     }
 
     insertGcpdMatch(db, {
-      match_id:      block.reservationId,
+      match_id:       block.matchId,
       reservation_id: block.reservationId,
-      map:           block.map,
-      date:          block.date,
-      duration:      block.duration,
-      result:        block.result,
-      score_own:     block.score_own,
-      score_enemy:   block.score_enemy,
-      rounds_played: block.rounds_played,
-      kills:         block.kills,
-      deaths:        block.deaths,
-      assists:       block.assists,
-      hs_count:      block.hs_count,
-      mvps:          block.mvps,
-      ping:          block.ping,
+      demo_url:       block.downloadUrl,
+      map:            block.map,
+      date:           block.date,
+      duration:       block.duration,
+      result:         block.result,
+      score_own:      block.score_own,
+      score_enemy:    block.score_enemy,
+      rounds_played:  block.rounds_played,
+      kills:          block.kills,
+      deaths:         block.deaths,
+      assists:        block.assists,
+      hs_count:       block.hs_count,
+      mvps:           block.mvps,
+      ping:           block.ping,
     });
 
-    if (block.downloadUrl) demoUrls.set(block.reservationId, block.downloadUrl);
-
     console.log(
-      `[gcpd] + ${block.reservationId}` +
+      `[gcpd] + ${block.matchId}` +
       ` | ${block.map}` +
       ` | ${block.result} ${block.score_own}:${block.score_enemy}` +
       ` | K${block.kills}/D${block.deaths}/A${block.assists}` +
-      ` | ping ${block.ping}`,
+      ` | ping ${block.ping}` +
+      (block.downloadUrl ? ' | demo queued' : ''),
     );
 
     inserted++;
-    if (DEBUG_SINGLE_MATCH) { done = true; return; }  // DEBUG: one match only
-  });
+  }
 
-  return { inserted, done };
+  return { inserted, done: hitExisting, pageEntries: leftPanels.length };
 }
 
 // ── Tab fetch loop ─────────────────────────────────────────────────────────────
 
 async function syncTab(
-  steamId:     string,
-  tab:         string,
+  steamId:      string,
+  tab:          string,
   cookieHeader: string,
-  demoUrls:    Map<string, string>,
 ): Promise<number> {
+  console.log('[gcpd] Raw cookieHeader being sent:', cookieHeader);
   const db      = getDb();
   const baseUrl = `https://steamcommunity.com/profiles/${steamId}/gcpd/730`;
-  const m       = cookieHeader.match(/sessionid=([^;]+)/);
-  const sessionId = m ? m[1].trim() : '';
+  const sessionId = cookieHeader.split(';')
+    .map(c => c.trim())
+    .find(c => c.startsWith('sessionid='))
+    ?.split('=')[1] ?? '';
 
-  let continueToken: string | null = null;
-  let totalInserted = 0;
+  // Prime the session by visiting the GCPD page normally first.
+  // Steam requires a normal page visit before AJAX requests will return JSON.
+  try {
+    await axios.get(`https://steamcommunity.com/profiles/${steamId}/gcpd/730`, {
+      headers: { ...HEADERS, Cookie: cookieHeader },
+      maxRedirects: 5,
+      timeout: 15_000,
+    });
+    console.log('[gcpd] Session primed.');
+  } catch (err) {
+    console.warn('[gcpd] Primer request failed (continuing anyway):', (err as Error).message);
+  }
+  // Small delay to let Steam register the visit
+  await new Promise(r => setTimeout(r, 1000));
+
+  let continueToken:    string | null = null;
+  let totalInserted     = 0;
+  let consecutiveEmpty  = 0;
+  const EMPTY_PAGE_CUTOFF = 3;
 
   for (let page = 0; page < PAGE_LIMIT; page++) {
     const params: Record<string, string> = { ajax: '1', tab, sessionid: sessionId };
@@ -273,13 +308,33 @@ async function syncTab(
     try {
       const res = await axios.get(baseUrl, {
         params,
-        headers: { ...HEADERS, Cookie: cookieHeader },
+        headers: { ...HEADERS, Cookie: cookieHeader, Referer: baseUrl },
         timeout: 30_000,
+        maxRedirects: 0,
+        validateStatus: (s) => s < 400 || s === 302,
       });
 
-      // Dump for debugging
+      // Log the actual URL axios ended up at
+      console.log('[gcpd] Response URL:', res.request?.res?.responseUrl ?? res.config?.url);
+      console.log('[gcpd] Status:', res.status);
+      console.log('[gcpd] Redirect Location:', res.headers['location']);
+
       const raw = typeof res.data === 'string' ? res.data : JSON.stringify(res.data);
       fs.writeFileSync(`data/gcpd-debug-${tab}-page${page}.html`, raw);
+
+      if (page === 0) {
+        const cookieNames = cookieHeader.split(';').map(c => c.trim().split('=')[0]).filter(Boolean).join(', ');
+        console.log(`[gcpd] HTTP ${res.status} | response type: ${typeof res.data} | cookies present: ${cookieNames}`);
+        if (typeof res.data === 'string') {
+          console.log(`[gcpd] Response is plain HTML (expected JSON). First 300 chars:`);
+          console.log(raw.slice(0, 300));
+        }
+      }
+
+      if (res.status !== 200) {
+        console.warn(`[gcpd] Non-200 response (${res.status}) on ${tab} page ${page} — stopping.`);
+        break;
+      }
 
       if (typeof res.data === 'object' && res.data !== null) {
         const d = res.data as Record<string, unknown>;
@@ -293,9 +348,28 @@ async function syncTab(
       break;
     }
 
-    const { inserted, done } = processPage(db, html, steamId, demoUrls);
+    let inserted = 0, done = false, pageEntries = 0;
+    try {
+      ({ inserted, done, pageEntries } = processPage(db, html, steamId));
+    } catch (err) {
+      console.warn(`[gcpd] Error processing ${tab} page ${page}:`, err);
+      break;
+    }
     totalInserted += inserted;
     console.log(`[gcpd] ${tab} page ${page} — ${inserted} new match(es)${done ? ' (up to date)' : ''}`);
+
+    if (page === 0 && pageEntries === 0 && !nextToken) {
+      console.warn(`[gcpd] Warning: page 0 returned no entries and no continue token.`);
+      console.warn(`[gcpd]   This usually means the Steam session cookie is expired.`);
+      console.warn(`[gcpd]   Open the dashboard and use the Login button to re-authenticate.`);
+    }
+
+    if (pageEntries === 0) {
+      consecutiveEmpty++;
+      if (consecutiveEmpty >= EMPTY_PAGE_CUTOFF) break;
+    } else {
+      consecutiveEmpty = 0;
+    }
 
     if (done || !nextToken) break;
     continueToken = nextToken;
@@ -310,21 +384,33 @@ async function syncTab(
  * Sync all GCPD tabs, inserting new matches and stopping once existing data
  * is encountered (incremental, self-terminating).
  *
- * Returns a map of matchId → downloadUrl for matches that have a demo URL —
- * used by the optional ADR enrichment step in parseDemos.ts.
+ * Demo URLs are persisted directly to the matches table (demo_url column).
+ * Returns the total number of newly inserted matches.
  */
 export async function syncFromGcpd(
   cookieHeader: string,
   steamId:      string,
-): Promise<Map<string, string>> {
-  const demoUrls     = new Map<string, string>();
-  let   totalInserted = 0;
+): Promise<number> {
+  let totalInserted = 0;
 
   for (const tab of TABS) {
-    const n = await syncTab(steamId, tab, cookieHeader, demoUrls);
-    totalInserted += n;
+    totalInserted += await syncTab(steamId, tab, cookieHeader);
   }
 
   console.log(`[gcpd] Sync complete — ${totalInserted} new match(es) inserted across ${TABS.length} tab(s).`);
-  return demoUrls;
+
+  // Keep debug dumps when nothing was inserted — lets you inspect the raw Steam response.
+  // Delete them only on successful syncs to avoid stale files piling up.
+  if (totalInserted > 0) {
+    try {
+      const dataDir = path.join(process.cwd(), 'data');
+      for (const f of fs.readdirSync(dataDir).filter(n => n.startsWith('gcpd-debug-'))) {
+        fs.unlinkSync(path.join(dataDir, f));
+      }
+    } catch { /* non-fatal */ }
+  } else {
+    console.log('[gcpd] Debug files preserved in data/ — inspect gcpd-debug-*.html to see the raw Steam response.');
+  }
+
+  return totalInserted;
 }

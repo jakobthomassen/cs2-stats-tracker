@@ -16,7 +16,7 @@ import { initDb, getDb, closeDb } from './src/db/database';
 import { AppConfig } from './src/sync/matchFetcher';
 import { syncFromGcpd } from './src/sync/gcpdFetcher';
 import { snapshotWeaponStats } from './src/sync/weaponSnapshots';
-import { parseAllStubMatches } from './src/sync/parseDemos';
+import { parseAllDemos } from './src/sync/parseDemos';
 import { getSteamCookie } from './src/auth/steamAuth';
 import { createServer } from './src/server/index';
 import gsiRouter from './src/gsi/listener';
@@ -77,18 +77,16 @@ async function main(): Promise<void> {
     } else {
       // ── GCPD sync ───────────────────────────────────────────────────────
       console.log('\n[start] Syncing match history from GCPD…');
-      let demoUrls: Map<string, string> = new Map();
       let matchesFetched = 0;
       let syncStatus: 'ok' | 'error' = 'ok';
       let syncError: string | undefined;
 
       try {
-        demoUrls = await syncFromGcpd(steamCookie, cfg.steamId);
-        matchesFetched = demoUrls.size; // approximate — new matches only
+        matchesFetched = await syncFromGcpd(steamCookie, cfg.steamId);
       } catch (err) {
         syncStatus = 'error';
-        syncError  = (err as Error).message;
-        console.error('[start] GCPD sync error:', syncError);
+        syncError  = (err instanceof Error) ? err.message : String(err);
+        console.error('[start] GCPD sync error:', err);
       }
 
       // Write sync log
@@ -97,11 +95,11 @@ async function main(): Promise<void> {
         VALUES (?, '', ?, ?, ?)
       `).run(Math.floor(Date.now() / 1000), matchesFetched, syncStatus, syncError ?? null);
 
-      // ── ADR demo download ──────────────────────────────────────────────
-      if (demoUrls.size > 0) {
-        console.log('\n[start] Downloading demos for ADR enrichment…');
-        await parseAllStubMatches(cfg.steamId, steamCookie, demoUrls);
-      }
+      // ── Demo processing ────────────────────────────────────────────────
+      // Queries DB directly — handles new queued demos, cached .bz2 files,
+      // and any matches left interrupted from a previous run.
+      console.log('\n[start] Processing demos…');
+      await parseAllDemos(cfg.steamId, steamCookie);
 
       // ── Weapon stats (optional) ────────────────────────────────────────
       if (cfg.steamApiKey) {

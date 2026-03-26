@@ -177,19 +177,27 @@ function migrate(): void {
   // Additive column migrations — SQLite throws if the column already exists,
   // so we catch and ignore that specific error.
   const addColumns = [
-    `ALTER TABLE matches ADD COLUMN demo_status TEXT NOT NULL DEFAULT 'pending'`,
+    `ALTER TABLE matches ADD COLUMN demo_status TEXT NOT NULL DEFAULT 'no_demo'`,
     `ALTER TABLE matches ADD COLUMN reservation_id TEXT`,
+    `ALTER TABLE matches ADD COLUMN demo_url TEXT`,
+    `ALTER TABLE matches ADD COLUMN ttd_ms_rifle REAL`,
+    `ALTER TABLE matches ADD COLUMN ttd_ms_awp REAL`,
+    `ALTER TABLE matches ADD COLUMN xhair_deg_rifle REAL`,
+    `ALTER TABLE matches ADD COLUMN xhair_deg_awp REAL`,
+    `ALTER TABLE matches ADD COLUMN spotted_acc REAL`,
+    `ALTER TABLE matches ADD COLUMN aim_rating REAL`,
+    `ALTER TABLE matches ADD COLUMN aim_sample_count INTEGER`,
   ];
   for (const sql of addColumns) {
     try { _db.run(sql); } catch { /* column already exists — expected */ }
   }
 
-  // Widen demo_status CHECK constraint to include 'gcpd_ok'.
-  // SQLite can't ALTER constraints, so we use the table-rename dance.
-  // We detect whether migration is needed by inspecting sqlite_master.
+  // Migrate demo_status to the new status vocabulary and add demo_url column.
+  // Detects whether migration is needed by checking for the new value 'parsed'
+  // in the CHECK constraint — covers both very-old and intermediate schemas.
   const masterResult = _db.exec(`SELECT sql FROM sqlite_master WHERE type='table' AND name='matches'`);
   const currentSql = (masterResult[0]?.values?.[0]?.[0] as string) ?? '';
-  if (!currentSql.includes('gcpd_ok')) {
+  if (!currentSql.includes("'parsed'")) {
     _db.run('PRAGMA foreign_keys = OFF');
     try {
       _db.run(`DROP TABLE IF EXISTS matches_bak`);
@@ -212,10 +220,42 @@ function migrate(): void {
         adr           REAL NOT NULL DEFAULT 0,
         mvps          INTEGER NOT NULL DEFAULT 0,
         ping          INTEGER NOT NULL DEFAULT 0,
-        demo_status   TEXT NOT NULL DEFAULT 'pending'
-          CHECK(demo_status IN ('pending','ok','expired','server_gone','parse_error','gcpd_ok'))
+        demo_status   TEXT NOT NULL DEFAULT 'no_demo'
+          CHECK(demo_status IN ('queued','downloaded','parsed','corrupt','expired','no_demo')),
+        demo_url          TEXT,
+        ttd_ms_rifle      REAL,
+        ttd_ms_awp        REAL,
+        xhair_deg_rifle   REAL,
+        xhair_deg_awp     REAL,
+        spotted_acc       REAL,
+        aim_rating        REAL,
+        aim_sample_count  INTEGER
       )`);
-      _db.run(`INSERT INTO matches SELECT * FROM matches_bak`);
+      // Remap old status values; demo_url starts NULL (repopulated by next GCPD sync)
+      _db.run(`
+        INSERT INTO matches (
+          match_id, share_code, reservation_id, map, date, duration, result,
+          score_own, score_enemy, rounds_played, kills, deaths, assists,
+          hs_count, adr, mvps, ping, demo_status,
+          ttd_ms_rifle, ttd_ms_awp, xhair_deg_rifle, xhair_deg_awp,
+          spotted_acc, aim_rating, aim_sample_count
+        )
+        SELECT
+          match_id, share_code, reservation_id, map, date, duration, result,
+          score_own, score_enemy, rounds_played, kills, deaths, assists,
+          hs_count, adr, mvps, ping,
+          CASE demo_status
+            WHEN 'ok'          THEN 'parsed'
+            WHEN 'gcpd_ok'     THEN 'queued'
+            WHEN 'parse_error' THEN 'corrupt'
+            WHEN 'server_gone' THEN 'expired'
+            WHEN 'pending'     THEN 'no_demo'
+            ELSE demo_status
+          END,
+          ttd_ms_rifle, ttd_ms_awp, xhair_deg_rifle, xhair_deg_awp,
+          spotted_acc, aim_rating, aim_sample_count
+        FROM matches_bak
+      `);
       _db.run(`DROP TABLE matches_bak`);
     } finally {
       _db.run('PRAGMA foreign_keys = ON');
